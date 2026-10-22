@@ -135,9 +135,18 @@ struct LootDrop
 	}
 };
 
+// NOSONE: rand() keeps its state per thread and srand() only ran on the init thread, so the
+// game thread rolled the same unseeded sequence every match (always the same loot).
+// Same 0..32767 range as rand(), seeded once per thread.
+static inline int LootRand()
+{
+	thread_local std::mt19937 Generator(std::random_device{}());
+	return (int)(Generator() & 0x7FFF);
+}
+
 static inline float RandomFloatForLoot(float AllWeightsSum)
 {
-	return (rand() * 0.000030518509f) * AllWeightsSum;
+	return (LootRand() * 0.000030518509f) * AllWeightsSum;
 }
 
 template <typename KeyType, typename ValueType>

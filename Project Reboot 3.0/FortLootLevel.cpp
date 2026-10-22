@@ -1,5 +1,6 @@
 #include "FortLootLevel.h"
 #include "FortWorldItemDefinition.h"
+#include "FortLootPackage.h"
 
 int UFortLootLevel::GetItemLevel(const FDataTableCategoryHandle& LootLevelData, int WorldLevel)
 {
@@ -58,7 +59,7 @@ int UFortLootLevel::GetItemLevel(const FDataTableCategoryHandle& LootLevelData, 
 			}
 			else
 			{
-				auto v16 = (int)(float)((float)((float)rand() * 0.000030518509) * (float)(v15 + 1));
+				auto v16 = (int)(float)((float)((float)LootRand() * 0.000030518509) * (float)(v15 + 1));
 				if (v16 <= v15)
 					v15 = v16;
 			}

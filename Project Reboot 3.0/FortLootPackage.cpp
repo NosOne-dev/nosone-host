@@ -122,7 +122,7 @@ float GetAmountOfLootPackagesToDrop(FFortLootTierData* LootTierData, int Origina
         {
             // HONESTLY IDEK WHAT FORTNITE DOES HERE
 
-            float v29 = (float)rand() * 0.000030518509f;
+            float v29 = (float)LootRand() * 0.000030518509f;
 
             float v35 = (int)(float)((float)((float)((float)SumLootPackageCategoryWeightArray * v29)
                 + (float)((float)SumLootPackageCategoryWeightArray * v29))
@@ -152,7 +152,7 @@ float GetAmountOfLootPackagesToDrop(FFortLootTierData* LootTierData, int Origina
     std::vector<FFortItemEntry> ItemEntries;
 }; */
 
-FFortLootTierData* PickLootTierData(const std::vector<UDataTable*>& LTDTables, FName LootTierGroup, int ForcedLootTier = -1, FName* OutRowName = nullptr) // Fortnite returns the row name and then finds the tier data again, but I really don't see the point of this.
+FFortLootTierData* PickLootTierData(const std::vector<UDataTable*>& LTDTables, FName LootTierGroup, int ForcedLootTier = -1, FName* OutRowName = nullptr, const std::vector<FName>& ExcludedRows = {}) // Fortnite returns the row name and then finds the tier data again, but I really don't see the point of this.
 {
     // This like isn't right, at all.
 
@@ -175,6 +175,9 @@ FFortLootTierData* PickLootTierData(const std::vector<UDataTable*>& LTDTables, F
     LOOTING_MAP_TYPE<FName, FFortLootTierData*> TierGroupLTDs;
 
     CollectDataTablesRows<FFortLootTierData>(LTDTables, &TierGroupLTDs, [&](FName RowName, FFortLootTierData* TierData) -> bool {
+        if (std::find(ExcludedRows.begin(), ExcludedRows.end(), RowName) != ExcludedRows.end())
+            return false;
+
         if (LootTierGroup == TierData->GetTierGroup())
         {
             if ((LootTier == -1 ? true : LootTier == TierData->GetLootTier()))
@@ -193,6 +196,17 @@ FFortLootTierData* PickLootTierData(const std::vector<UDataTable*>& LTDTables, F
         true, Multiplier, OutRowName);
 
     return ChosenRowLootTierData;
+}
+
+// NOSONE: drops can be combined into an existing stack, so count items rather than entries.
+static int CountLootDrops(std::vector<LootDrop>& LootDrops)
+{
+    int Count = 0;
+
+    for (auto& Drop : LootDrops)
+        Count += Drop->GetCount();
+
+    return Count;
 }
 
 void PickLootDropsFromLootPackage(const std::vector<UDataTable*>& LPTables, const FName& LootPackageName, std::vector<LootDrop>* OutEntries, int LootPackageCategory = -1, int WorldLevel = 0, bool bPrint = false, bool bCombineDrops = true)
@@ -232,18 +246,32 @@ void PickLootDropsFromLootPackage(const std::vector<UDataTable*>& LPTables, cons
     }
 
     FName PickedPackageRowName;
-    FFortLootPackageData* PickedPackage = PickWeightedElement<FName, FFortLootPackageData*>(LootPackageIDMap,
-        [](FFortLootPackageData* LootPackageData) -> float { return LootPackageData->GetWeight(); }, RandomFloatForLoot,
-        -1, true, 1, &PickedPackageRowName, bPrint);
+    FFortLootPackageData* PickedPackage = nullptr;
 
-    if (!PickedPackage)
-        return;
-
-    if (bPrint)
-        LOG_INFO(LogLoot, "PickLootDropsFromLootPackage selected package {} with loot package category {} with weight {} from LootPackageIDMap of size: {}", PickedPackageRowName.ToString(), LootPackageCategory, PickedPackage->GetWeight(), LootPackageIDMap.size());
-
-    if (PickedPackage->GetLootPackageCall().Data.Num() > 1)
+    // NOSONE: on 14.60 many called lists only hold vaulted rows that all weigh 0, so such a call
+    // dropped nothing (empty chests, no floor loot). Then another package of this ID is tried.
+    for (int Attempt = 0; Attempt < 8; ++Attempt)
     {
+        PickedPackage = PickWeightedElement<FName, FFortLootPackageData*>(LootPackageIDMap,
+            [](FFortLootPackageData* LootPackageData) -> float { return LootPackageData->GetWeight(); }, RandomFloatForLoot,
+            -1, true, 1, &PickedPackageRowName, false);
+
+        if (!PickedPackage)
+        {
+            if (bPrint)
+                LOG_INFO(LogLoot, "Loot package {} has no row with a weight ({} rows)", LootPackageName.ToString(), LootPackageIDMap.size());
+
+            return;
+        }
+
+        if (bPrint)
+            LOG_INFO(LogLoot, "PickLootDropsFromLootPackage selected package {} with loot package category {} with weight {} from LootPackageIDMap of size: {}", PickedPackageRowName.ToString(), LootPackageCategory, PickedPackage->GetWeight(), LootPackageIDMap.size());
+
+        if (PickedPackage->GetLootPackageCall().Data.Num() <= 1)
+            break;
+
+        int DropsBefore = CountLootDrops(*OutEntries);
+
         if (PickedPackage->GetCount() > 0)
         {
             int v9 = 0;
@@ -261,8 +289,17 @@ void PickLootDropsFromLootPackage(const std::vector<UDataTable*>& LPTables, cons
             }
         }
 
-        return;
+        if (CountLootDrops(*OutEntries) > DropsBefore || PickedPackage->GetCount() <= 0)
+            return;
+
+        LootPackageIDMap.erase(PickedPackageRowName);
+
+        if (LootPackageIDMap.empty())
+            return;
     }
+
+    if (PickedPackage->GetLootPackageCall().Data.Num() > 1)
+        return;
 
     auto ItemDefinition = PickedPackage->GetItemDefinition().Get(UFortItemDefinition::StaticClass(), true);
 
@@ -685,65 +722,83 @@ std::vector<LootDrop> PickLootDrops(FName TierGroupName, int WorldLevel, int For
         return LootDrops;
     }
 
-    FName LootTierRowName;
-    auto ChosenRowLootTierData = PickLootTierData(LTDTables, TierGroupName, ForcedLootTier, &LootTierRowName);
+    std::vector<FName> ExcludedTierRows;
 
-    if (!ChosenRowLootTierData)
+    // NOSONE: a row whose packages only lead to lists that all weigh 0 dropped nothing at all;
+    // then another row of the tier group is tried. Rows meant to be empty stay empty.
+    for (int TierAttempt = 0; TierAttempt < 8 && LootDrops.empty(); ++TierAttempt)
     {
-        LOG_INFO(LogLoot, "Failed to find LootTierData row for {} with loot tier {}", TierGroupName.ToString(), ForcedLootTier);
-        return LootDrops;
-    }
-    else if (bPrint)
-    {
-        LOG_INFO(LogLoot, "Picked loot tier data row {}", LootTierRowName.ToString());
-    }
+        FName LootTierRowName;
+        auto ChosenRowLootTierData = PickLootTierData(LTDTables, TierGroupName, ForcedLootTier, &LootTierRowName, ExcludedTierRows);
 
-    // auto ChosenLootPackageName = ChosenRowLootTierData->GetLootPackage().ToString();
-
-    // if (ChosenLootPackageName.contains(".Empty")) { return PickLootDropsNew(TierGroupName, bPrint, ++recursive); }
-
-    float NumLootPackageDrops = ChosenRowLootTierData->GetNumLootPackageDrops();
-
-    float NumberLootDrops = 0;
-
-    if (NumLootPackageDrops > 0)
-    {
-        if (NumLootPackageDrops < 1)
+        if (!ChosenRowLootTierData)
         {
-            NumberLootDrops = 1;
+            if (TierAttempt == 0)
+                LOG_INFO(LogLoot, "Failed to find LootTierData row for {} with loot tier {}", TierGroupName.ToString(), ForcedLootTier);
+
+            return LootDrops;
         }
-        else
+        else if (bPrint)
         {
-            NumberLootDrops = (int)(float)((float)(NumLootPackageDrops + NumLootPackageDrops) - 0.5f) >> 1;
-            float v20 = NumLootPackageDrops - NumberLootDrops;
-            if (v20 > 0.0000099999997f)
+            LOG_INFO(LogLoot, "Picked loot tier data row {}", LootTierRowName.ToString());
+        }
+
+        // auto ChosenLootPackageName = ChosenRowLootTierData->GetLootPackage().ToString();
+
+        // if (ChosenLootPackageName.contains(".Empty")) { return PickLootDropsNew(TierGroupName, bPrint, ++recursive); }
+
+        float NumLootPackageDrops = ChosenRowLootTierData->GetNumLootPackageDrops();
+
+        float NumberLootDrops = 0;
+
+        if (NumLootPackageDrops > 0)
+        {
+            if (NumLootPackageDrops < 1)
             {
-                NumberLootDrops += v20 >= (rand() * 0.000030518509f);
+                NumberLootDrops = 1;
+            }
+            else
+            {
+                NumberLootDrops = (int)(float)((float)(NumLootPackageDrops + NumLootPackageDrops) - 0.5f) >> 1;
+                float v20 = NumLootPackageDrops - NumberLootDrops;
+                if (v20 > 0.0000099999997f)
+                {
+                    NumberLootDrops += v20 >= (LootRand() * 0.000030518509f);
+                }
             }
         }
-    }
 
-    float AmountOfLootPackageDrops = GetAmountOfLootPackagesToDrop(ChosenRowLootTierData, NumberLootDrops);
+        float AmountOfLootPackageDrops = GetAmountOfLootPackagesToDrop(ChosenRowLootTierData, NumberLootDrops);
 
-    LootDrops.reserve(AmountOfLootPackageDrops);
+        LootDrops.reserve(AmountOfLootPackageDrops);
 
-    if (AmountOfLootPackageDrops > 0)
-    {
-        for (int i = 0; i < AmountOfLootPackageDrops; ++i)
+        if (AmountOfLootPackageDrops > 0)
         {
-            if (i >= ChosenRowLootTierData->GetLootPackageCategoryMinArray().Num())
-                break;
-
-            for (int j = 0; j < ChosenRowLootTierData->GetLootPackageCategoryMinArray().at(i); ++j)
+            for (int i = 0; i < AmountOfLootPackageDrops; ++i)
             {
-                if (ChosenRowLootTierData->GetLootPackageCategoryMinArray().at(i) < 1)
+                if (i >= ChosenRowLootTierData->GetLootPackageCategoryMinArray().Num())
                     break;
 
-                int LootPackageCategory = i;
+                for (int j = 0; j < ChosenRowLootTierData->GetLootPackageCategoryMinArray().at(i); ++j)
+                {
+                    if (ChosenRowLootTierData->GetLootPackageCategoryMinArray().at(i) < 1)
+                        break;
 
-                PickLootDropsFromLootPackage(LPTables, ChosenRowLootTierData->GetLootPackage(), &LootDrops, LootPackageCategory, WorldLevel, bPrint);
+                    int LootPackageCategory = i;
+
+                    PickLootDropsFromLootPackage(LPTables, ChosenRowLootTierData->GetLootPackage(), &LootDrops, LootPackageCategory, WorldLevel, bPrint);
+                }
             }
         }
+
+        if (!LootDrops.empty() || ChosenRowLootTierData->GetNumLootPackageDrops() <= 0
+            || ChosenRowLootTierData->GetLootPackage().ToString().contains(".Empty"))
+            break;
+
+        if (bPrint)
+            LOG_INFO(LogLoot, "Loot tier row {} dropped nothing, trying another row", LootTierRowName.ToString());
+
+        ExcludedTierRows.push_back(LootTierRowName);
     }
 
     return LootDrops;

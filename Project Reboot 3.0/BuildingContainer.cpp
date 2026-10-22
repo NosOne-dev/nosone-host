@@ -25,7 +25,8 @@ bool ABuildingContainer::SpawnLoot(AFortPawn* Pawn)
 
 	auto LootDrops = PickLootDrops(RedirectedLootTier, GameState->GetWorldLevel(), -1, bDebugPrintLooting);
 
-	// LOG_INFO(LogInteraction, "LootDrops.size(): {}", LootDrops.size());
+	// NOSONE: one line per searched container, to follow empty chests in the match logs.
+	LOG_INFO(LogInteraction, "Searched {} ({} -> {}): {} drops", this->GetName(), GetSearchLootTierGroup().ToString(), RedirectedLootTier.ToString(), LootDrops.size());
 
 	for (auto& lootDrop : LootDrops)
 	{
