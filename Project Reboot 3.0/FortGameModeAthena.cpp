@@ -1242,6 +1242,27 @@ int AFortGameModeAthena::Athena_PickTeamHook(AFortGameModeAthena* GameMode, uint
 	return NextTeamIndex;
 }
 
+// NOSONE: on Fortnite 11+ the bus does not leave when the warmup countdown ends; the GUI's
+// "Start Bus" calls StartAircraftPhase from its own thread instead. This does the same once
+// the countdown set below has run out.
+static DWORD WINAPI NosoneAutoBusThread(LPVOID)
+{
+	Sleep(DWORD(AutoBusStartSeconds * 1000));
+
+	if (bStartedBus)
+		return 0;
+
+	bStartedBus = true;
+
+	auto GameMode = (AFortGameModeAthena*)GetWorld()->GetGameMode();
+	auto GameState = Cast<AFortGameStateAthena>(GameMode->GetGameState());
+
+	AmountOfPlayersWhenBusStart = GameState->GetPlayersLeft();
+	LOG_INFO(LogDev, "Starting the bus ({} players).", AmountOfPlayersWhenBusStart);
+	GameMode->StartAircraftPhase();
+	return 0;
+}
+
 void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena* GameMode, AActor* NewPlayerActor)
 {
 	if (NewPlayerActor == GetLocalPlayerController()) // we dont really need this but it also functions as a nullptr check usually
@@ -1282,6 +1303,9 @@ void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena
 			GameMode->Get<float>(WarmupEarlyCountdownDurationOffset) = EarlyDuration;
 
 			LOG_INFO(LogDev, "Auto starting bus in {}.", AutoBusStartSeconds);
+
+			if (bNosoneAutoBus && Fortnite_Version >= 11)
+				CreateThread(0, 0, NosoneAutoBusThread, 0, 0, 0);
 		}
 	}
 
