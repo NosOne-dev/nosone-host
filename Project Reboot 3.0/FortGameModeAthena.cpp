@@ -1254,7 +1254,10 @@ void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena
 
 	LOG_INFO(LogPlayer, "HandleStartingNewPlayer!");
 
-	if (Globals::bAutoRestart)
+	// NOSONE: the bus countdown runs on every server (it used to need the GUI's "Start Bus"
+	// or bAutoRestart, which is off): once NumRequiredPlayersToStart players are in, the bus
+	// leaves AutoBusStartSeconds later. The matchmaker sends a match's players together.
+	if (Globals::bAutoRestart || bNosoneAutoBus)
 	{
 		static int LastNum123 = 15;
 
